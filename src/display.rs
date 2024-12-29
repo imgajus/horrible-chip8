@@ -34,15 +34,9 @@ impl Sys {
         let mut screen: [u32; DISPLAY_WIDTH*DISPLAY_HEIGHT] = [BLACK_RGB; DISPLAY_WIDTH*DISPLAY_HEIGHT];
         for (index, pixel) in buffer.iter().enumerate() {
             match pixel {
-                true => {screen[index] = WHITE_RGB;
-                //println!("White value received ({})", index);
-                    //sleep(Duration::new(1, 0))
-                    ;},
+                true => {screen[index] = WHITE_RGB},
 
-                false => {screen[index] = BLACK_RGB;
-                //println!("Black value received ({})", index);
-                    //sleep(Duration::new(1, 0))
-                    ;}
+                false => {screen[index] = BLACK_RGB}
             }
         }
         return screen;

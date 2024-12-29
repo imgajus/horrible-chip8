@@ -25,4 +25,4 @@ Cargo.lock
 /target
 
 # Manually added
-IBM Logo.ch8
+*.ch8

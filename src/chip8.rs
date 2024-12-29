@@ -91,15 +91,45 @@ impl Sys {
         }
         match op {
             0x0000 => match nnn {
-                0x00E0 => println!("Clear Screen"),
+                0x00E0 => {
+                    self.buffer.fill(false);
+                    let screen = self.translate_buffer(self.buffer);
+                    window.update_with_buffer(&screen, 64, 32).unwrap()
+                },
+                0x00EE => {
+                    self.program_counter = self.stack.pop().expect("STACK IS EMPTY");
+                }
                 _ => panic_unexpected(&op, &nnn)
             },
             0x1000 => self.program_counter = nnn,
+            0x2000 => {
+                self.stack.push(self.program_counter);
+                self.program_counter = nnn;
+            },
+            0x3000 => {
+                if self.v_register[x as usize] == nn as u8 { self.program_counter += 2 }
+            },
+            0x4000 => { if self.v_register[x as usize] != nn as u8 { self.program_counter += 2 }},
+            0x5000 => { if self.v_register[x as usize] == self.v_register[y as usize] {
+                self.program_counter += 2 }},
             0x6000 => {
                 self.v_register[x as usize] = nn as u8;
-                //panic!("nn is '{:#08x} {}", x, x as usize);
                 },
             0x7000 => self.v_register[x as usize] += nn as u8,
+            0x8000 => match n {
+                0 => self.v_register[x as usize] = self.v_register[y as usize],
+                1 => self.v_register[x as usize] |= self.v_register[y as usize],
+                2 => self.v_register[x as usize] &= self.v_register[y as usize],
+                3 => self.v_register[x as usize] ^= self.v_register[y as usize],
+                4 => {
+                    let add: (u8, bool) = self.v_register[x as usize].overflowing_add(self.v_register[y as usize]);
+                    if add.1 { self.v_register[0xF] = 1} else { self.v_register[0xF] = 0}
+                    self.v_register[x as usize] = add.0;
+                }
+                _ => panic_unexpected(&op, &n)
+            }
+            0x9000 => { if self.v_register[x as usize] != self.v_register[y as usize] {
+                self.program_counter += 2 }},
             0xA000 => self.index_register = nnn,
             0xD000 => {
                 let x_pos = self.v_register[x as usize] % 64;;

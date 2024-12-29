@@ -6,7 +6,7 @@ use horrible_chip8::Sys;
 fn main() {
     let mut emu = Sys::new();
     emu.initialize();
-    emu.load_program("".parse().unwrap()).expect("TODO: panic message");
+    emu.load_program("test_opcode.ch8".parse().unwrap()).expect("TODO: panic message");
     let mut window: Window = emu.run_display();
     while window.is_open() {;
         let now = Instant::now();
