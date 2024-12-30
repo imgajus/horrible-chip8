@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::fs;
 use std::time::Duration;
 use minifb::{Window, WindowOptions, Key, Scale};
+use rand::Rng;
 use super::constants::*;
 
 pub struct Sys {
@@ -13,7 +15,7 @@ pub struct Sys {
     pub(crate) buffer: [bool; DISPLAY_WIDTH * DISPLAY_HEIGHT],
     stack: Vec<u16>,
     cycle_speed: f64,
-
+    key_map: HashMap<u8, Key>
 }
 
 impl Sys {
@@ -28,6 +30,24 @@ impl Sys {
             buffer: [false; DISPLAY_WIDTH*DISPLAY_HEIGHT],
             stack: Vec::new(),
             cycle_speed: 60.0/SPEED,
+            key_map: HashMap::from([
+                (0x1, Key::Key1),
+                (0x2, Key::Key2),
+                (0x3, Key::Key3),
+                (0xC, Key::Key4),
+                (0x4, Key::Q),
+                (0x5, Key::W),
+                (0x6, Key::E),
+                (0xD, Key::R),
+                (0x7, Key::A),
+                (0x8, Key::S),
+                (0x9, Key::D),
+                (0xE, Key::F),
+                (0xA, Key::Y),
+                (0x0, Key::X),
+                (0xB, Key::C),
+                (0xF, Key::V),
+            ])
         }
     }
     pub fn initialize(&mut self) {
@@ -115,7 +135,10 @@ impl Sys {
             0x6000 => {
                 self.v_register[x as usize] = nn as u8;
                 },
-            0x7000 => self.v_register[x as usize] += nn as u8,
+            0x7000 => {
+                let add: (u8, bool) = self.v_register[x as usize].overflowing_add(nn as u8);
+                self.v_register[x as usize] = add.0
+                },
             0x8000 => match n {
                 0 => self.v_register[x as usize] = self.v_register[y as usize],
                 1 => self.v_register[x as usize] |= self.v_register[y as usize],
@@ -125,12 +148,36 @@ impl Sys {
                     let add: (u8, bool) = self.v_register[x as usize].overflowing_add(self.v_register[y as usize]);
                     if add.1 { self.v_register[0xF] = 1} else { self.v_register[0xF] = 0}
                     self.v_register[x as usize] = add.0;
+                },
+                5 => {
+                    let sub: (u8, bool) = self.v_register[x as usize].overflowing_sub(self.v_register[y as usize]);
+                    if sub.1 { self.v_register[0xF] = 0} else {self.v_register[0xF] = 1}
+                    self.v_register[x as usize] = sub.0;
+                }
+                6 => {
+                    self.v_register[x as usize] = self.v_register[y as usize];
+                    self.v_register[x as usize] >>= 1;
+                }
+                7 => {
+                    let sub: (u8, bool) = self.v_register[y as usize].overflowing_sub(self.v_register[x as usize]);
+                    if sub.1 { self.v_register[0xF] = 0} else {self.v_register[0xF] = 1}
+                    self.v_register[x as usize] = sub.0;
+                },
+                0xA => self.index_register = nnn,
+                0xE => {
+                    self.v_register[x as usize] = self.v_register[y as usize];
+                    self.v_register[x as usize] <<= 1;
                 }
                 _ => panic_unexpected(&op, &n)
             }
             0x9000 => { if self.v_register[x as usize] != self.v_register[y as usize] {
                 self.program_counter += 2 }},
             0xA000 => self.index_register = nnn,
+            0xB000 => self.program_counter = nnn.overflowing_add(self.v_register[0] as u16).0, //not sure
+            0xC000 => {
+                let mut rng = rand::thread_rng();
+                self.v_register[x as usize] = (nn & rng.gen::<u16>()) as u8
+            }
             0xD000 => {
                 let x_pos = self.v_register[x as usize] % 64;;
                 let mut y_coord = self.v_register[y as usize] % 32;
@@ -163,6 +210,10 @@ impl Sys {
                 let screen = self.translate_buffer(self.buffer);
                 window.update_with_buffer(&screen, 64, 32).unwrap()
 
+            },
+            0xE000 => match nn {
+                0x9E => println!("Input, TODO"),
+                _ => println!("Input, unknown")
             }
             _ => panic_unexpected(&op, &nnn)
         }
