@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
-use minifb::{Window, WindowOptions, Key, Scale};
+use minifb::{Window, WindowOptions, Key, Scale, KeyRepeat};
+use minifb::Key::P;
 use rand::Rng;
 use super::constants::*;
 
@@ -9,13 +11,14 @@ pub struct Sys {
     ram : [u8; RAM_SIZE],
     index_register: u16,
     program_counter: u16,
-    delay_timer: u8,
-    sound_timer: u8,
+    pub delay_timer: u8,
+    pub sound_timer: u8,
     v_register: [u8; 16],
     pub(crate) buffer: [bool; DISPLAY_WIDTH * DISPLAY_HEIGHT],
     stack: Vec<u16>,
     cycle_speed: f64,
-    key_map: HashMap<u8, Key>
+    hex_to_key_map: HashMap<u8, Key>,
+    key_to_hex_map: HashMap<Key, u8>
 }
 
 impl Sys {
@@ -30,7 +33,7 @@ impl Sys {
             buffer: [false; DISPLAY_WIDTH*DISPLAY_HEIGHT],
             stack: Vec::new(),
             cycle_speed: 60.0/SPEED,
-            key_map: HashMap::from([
+            hex_to_key_map: HashMap::from([
                 (0x1, Key::Key1),
                 (0x2, Key::Key2),
                 (0x3, Key::Key3),
@@ -47,11 +50,29 @@ impl Sys {
                 (0x0, Key::X),
                 (0xB, Key::C),
                 (0xF, Key::V),
-            ])
+            ]),
+            key_to_hex_map: HashMap::from([
+                (Key::Key1, 0x1),
+                (Key::Key2, 0x2),
+                (Key::Key3, 0x3),
+                (Key::Key4, 0xC),
+                (Key::Q, 0x4),
+                (Key::W, 0x5),
+                (Key::E, 0x6),
+                (Key::R, 0xD),
+                (Key::A, 0x7),
+                (Key::S, 0x8),
+                (Key::D, 0x9),
+                (Key::F, 0xE),
+                (Key::Y, 0xA),
+                (Key::X, 0x0),
+                (Key::C, 0xB),
+                (Key::V, 0xF),
+            ]),
         }
     }
     pub fn initialize(&mut self) {
-        self.load_into_ram(FONTSET_SIZE, &FONT)
+        self.load_into_ram(0x50, &FONT)
     }
     pub fn pop(&mut self) -> Option<u16> {
         self.stack.pop()
@@ -59,7 +80,7 @@ impl Sys {
     pub fn push(&mut self, action: u16) {
         self.stack.push(action)
     }
-    pub fn load_program(&mut self, filepath: String) -> Result<(), std::io::Error>{
+    pub fn load_program(&mut self, filepath: PathBuf) -> Result<(), std::io::Error>{
         let program = fs::read(&filepath)?;
         self.load_into_ram(0x200, program.as_slice());
         self.program_counter = 0x200;
@@ -80,7 +101,7 @@ impl Sys {
         self.program_counter += 2;
         data
     }
-    pub fn decode_execute(&mut self, data: u16, mut window: &mut Window) {
+    pub fn decode_execute(&mut self, data: u16, mut window: &mut Window){
         let op: u16 = (data & 0xF000); //first nibble
         let x: u16 = (data & 0xF00) >> 8; //second nibble
         let y: u16 = (data & 0xF0) >> 4; //third nibble
@@ -117,9 +138,11 @@ impl Sys {
                     window.update_with_buffer(&screen, 64, 32).unwrap()
                 },
                 0x00EE => {
-                    self.program_counter = self.stack.pop().expect("STACK IS EMPTY");
+                    self.program_counter = self.stack.pop().expect("STACK IS EMPTY")
                 }
-                _ => panic_unexpected(&op, &nnn)
+                _ => {
+                    panic_unexpected(&op, &nnn)
+                }
             },
             0x1000 => self.program_counter = nnn,
             0x2000 => {
@@ -189,7 +212,7 @@ impl Sys {
                     for a in 0..8 {
                         println!("Current Sprite {:#04b} Current x_coord {} Current y_coord {}", sprite, x_coord, y_coord);
                         if sprite & mask != 0 {
-                            let index_coord: usize = ((y_coord as usize) * 64 + (x_coord as usize)) as usize;
+                            let index_coord: usize = ((y_coord as usize) * 64 + (x_coord as usize));
                             match self.buffer[index_coord] {
                                 true => {
                                     self.buffer[index_coord] = false;
@@ -212,9 +235,70 @@ impl Sys {
 
             },
             0xE000 => match nn {
-                0x9E => println!("Input, TODO"),
-                _ => println!("Input, unknown")
-            }
+                0x9E => {
+                    if window.is_key_down(self.hex_to_key_map[&(x as u8)]) {
+                        self.program_counter += 2;
+                    }
+                },
+                0xA1 => {
+                    if !window.is_key_down(self.hex_to_key_map[&(x as u8)]) {
+                        self.program_counter += 2;
+                    }
+                }
+                _ => panic_unexpected(&op, &nn)
+            },
+            0xF000 => match nn{
+                0x07 => self.v_register[x as usize] = self.delay_timer,
+                0x15 => self.delay_timer = self.v_register[x as usize],
+                0x18 => self.sound_timer = self.v_register[x as usize],
+                0x1E => {
+                    if self.index_register + self.v_register[x as usize] as u16 > 0xFFF {
+                        self.v_register[0xF] = 1;
+                        self.index_register += self.v_register[x as usize] as u16;
+                        self.index_register -= 0xFFF;
+                    } else {
+                        self.index_register += self.v_register[x as usize] as u16;
+                    }
+                },
+                0x0A => {
+                    let pad_key = P;
+                    let key_pressed = window.get_keys_pressed(KeyRepeat::No);
+                    for key in key_pressed {
+                        if self.key_to_hex_map.contains_key(&key) {
+                            let pad_key = key;
+                            break;
+                        }
+                    }
+                    if pad_key != P {
+                        self.program_counter -= 2;
+                        self.v_register[x as usize] = self.key_to_hex_map[&pad_key];
+                    }
+                }
+                0x29 => self.index_register = (0x50 + self.v_register[x as usize]) as u16,
+                0x33 => {
+                    let mut digit: u8 = self.v_register[x as usize];
+                    println!("FX33, Input Number: {}", digit);
+                    self.ram[self.index_register as usize + 2] = digit % 10;
+                    println!("FX33, Third Digit: {}", digit % 10);
+                    digit /= 10;
+                    self.ram[self.index_register as usize + 1] = digit % 10;
+                    println!("FX33, Second Digit: {}", digit % 10);
+                    digit /= 10;
+                    println!("FX33, First Digit: {}", digit % 10);
+                    self.ram[self.index_register as usize] = digit;
+                },
+                0x55 => {
+                    for i in 0..x+1 {
+                        self.ram[(self.index_register + i) as usize] = self.v_register[i as usize]
+                    }
+                }
+                0x65 => {
+                    for i in 0..x+1 {
+                        self.v_register[i as usize] = self.ram[(self.index_register + i) as usize]
+                    }
+                }
+                _ => panic_unexpected(&op, &nn),
+            },
             _ => panic_unexpected(&op, &nnn)
         }
     }
