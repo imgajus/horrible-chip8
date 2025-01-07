@@ -1,5 +1,4 @@
 pub const RAM_SIZE: usize = 4096;
-pub const FONTSET_SIZE: usize = 80;
 pub const DISPLAY_HEIGHT: usize = 32;
 pub const DISPLAY_WIDTH: usize = 64;
 pub const WINDOW_NAME: &str = "Horrible CHIP-8";
@@ -23,7 +22,7 @@ pub const FONT: [u8; 80] = [
     0xF0, 0x80, 0xF0, 0x80, 0x80  // F
 ];
 
-const fn from_u8_rgb(r: u8, g: u8, b: u8) -> u32 {
+pub const fn from_u8_rgb(r: u8, g: u8, b: u8) -> u32 {
     let (r, g, b) = (r as u32, g as u32, b as u32);
     (r << 16) | (g << 8) | b
 }

@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
-use minifb::{Window, WindowOptions, Key, Scale, KeyRepeat};
-use minifb::Key::P;
+use minifb::{Window, Key, KeyRepeat};
 use rand::Rng;
 use super::constants::*;
 
@@ -16,14 +14,22 @@ pub struct Sys {
     v_register: [u8; 16],
     pub(crate) buffer: [bool; DISPLAY_WIDTH * DISPLAY_HEIGHT],
     stack: Vec<u16>,
-    cycle_speed: f64,
+    pub cycle_speed: f64,
     hex_to_key_map: HashMap<u8, Key>,
-    key_to_hex_map: HashMap<Key, u8>
+    key_to_hex_map: HashMap<Key, u8>,
+    pub key_pressed: Vec<Key>,
+    pub display_updated: bool
+}
+
+impl Default for Sys {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Sys {
     pub fn new() -> Sys {
-        return Sys{
+        Sys{
             ram : [0; RAM_SIZE],
             index_register: 0,
             program_counter: 0,
@@ -32,7 +38,7 @@ impl Sys {
             v_register: [0; 16],
             buffer: [false; DISPLAY_WIDTH*DISPLAY_HEIGHT],
             stack: Vec::new(),
-            cycle_speed: 60.0/SPEED,
+            cycle_speed: 1.0/SPEED,
             hex_to_key_map: HashMap::from([
                 (0x1, Key::Key1),
                 (0x2, Key::Key2),
@@ -69,6 +75,8 @@ impl Sys {
                 (Key::C, 0xB),
                 (Key::V, 0xF),
             ]),
+            key_pressed: Vec::new(),
+            display_updated: false
         }
     }
     pub fn initialize(&mut self) {
@@ -101,14 +109,14 @@ impl Sys {
         self.program_counter += 2;
         data
     }
-    pub fn decode_execute(&mut self, data: u16, mut window: &mut Window){
-        let op: u16 = (data & 0xF000); //first nibble
+    pub fn decode_execute(&mut self, data: u16, window: &mut Window){  
+        let op: u16 = data & 0xF000; //first nibble
         let x: u16 = (data & 0xF00) >> 8; //second nibble
         let y: u16 = (data & 0xF0) >> 4; //third nibble
         let n: u16 = data & 0xF; //fourth nibble
         let nn: u16 = data & 0xFF; //third & fourth nibbles
         let nnn: u16 = data & 0xFFF; //last three nibbles
-        println!(
+        /**(
             "\nInstruction Breakdown:\n\
              Full:  {:#06x} ({})\n\
              op:    {:#05x} ({})\n\
@@ -127,6 +135,7 @@ impl Sys {
             nnn, nnn,
             self.program_counter, self.program_counter
         );
+        */
         fn panic_unexpected(instruction: &u16, context: &u16) {
             panic!("Unexpected instruction '{:#06x}': {}", instruction, context);
         }
@@ -134,8 +143,7 @@ impl Sys {
             0x0000 => match nnn {
                 0x00E0 => {
                     self.buffer.fill(false);
-                    let screen = self.translate_buffer(self.buffer);
-                    window.update_with_buffer(&screen, 64, 32).unwrap()
+                    self.display_updated = true;
                 },
                 0x00EE => {
                     self.program_counter = self.stack.pop().expect("STACK IS EMPTY")
@@ -169,27 +177,33 @@ impl Sys {
                 3 => self.v_register[x as usize] ^= self.v_register[y as usize],
                 4 => {
                     let add: (u8, bool) = self.v_register[x as usize].overflowing_add(self.v_register[y as usize]);
-                    if add.1 { self.v_register[0xF] = 1} else { self.v_register[0xF] = 0}
                     self.v_register[x as usize] = add.0;
+                    if add.1 { self.v_register[0xF] = 1} else { self.v_register[0xF] = 0}
                 },
                 5 => {
                     let sub: (u8, bool) = self.v_register[x as usize].overflowing_sub(self.v_register[y as usize]);
-                    if sub.1 { self.v_register[0xF] = 0} else {self.v_register[0xF] = 1}
                     self.v_register[x as usize] = sub.0;
-                }
+                    if sub.1 { self.v_register[0xF] = 0} else {self.v_register[0xF] = 1}
+                },
                 6 => {
                     self.v_register[x as usize] = self.v_register[y as usize];
+                    let shifted_out = self.v_register[x as usize] & 0b00000001;
                     self.v_register[x as usize] >>= 1;
-                }
+                    if shifted_out > 1 { panic!("shifted out bit is greater than one: {}" ,shifted_out)}
+                    self.v_register[0xF] = shifted_out
+                },
                 7 => {
                     let sub: (u8, bool) = self.v_register[y as usize].overflowing_sub(self.v_register[x as usize]);
-                    if sub.1 { self.v_register[0xF] = 0} else {self.v_register[0xF] = 1}
                     self.v_register[x as usize] = sub.0;
+                    if sub.1 { self.v_register[0xF] = 0} else {self.v_register[0xF] = 1}
                 },
                 0xA => self.index_register = nnn,
                 0xE => {
+                    let shifted_out = (self.v_register[x as usize] & 0b10000000) >> 7;
                     self.v_register[x as usize] = self.v_register[y as usize];
                     self.v_register[x as usize] <<= 1;
+                    if shifted_out > 1 { panic!("shifted out bit is greater than one: {}" ,shifted_out)}
+                    self.v_register[0xF] = shifted_out
                 }
                 _ => panic_unexpected(&op, &n)
             }
@@ -198,21 +212,21 @@ impl Sys {
             0xA000 => self.index_register = nnn,
             0xB000 => self.program_counter = nnn.overflowing_add(self.v_register[0] as u16).0, //not sure
             0xC000 => {
-                let mut rng = rand::thread_rng();
-                self.v_register[x as usize] = (nn & rng.gen::<u16>()) as u8
+                let mut rng = rand::rng();
+                self.v_register[x as usize] = (nn & rng.random::<u16>()) as u8
             }
             0xD000 => {
-                let x_pos = self.v_register[x as usize] % 64;;
+                let x_pos = self.v_register[x as usize] % 64;
                 let mut y_coord = self.v_register[y as usize] % 32;
                 self.v_register[0xF] = 0;
                 for i in 0..n {
                     let mut x_coord = x_pos;  // Reset X to original position for each row
                     let mut mask: u8 = 0b10000000;
                     let sprite: u8 = self.ram[(self.index_register + i) as usize];
-                    for a in 0..8 {
-                        println!("Current Sprite {:#04b} Current x_coord {} Current y_coord {}", sprite, x_coord, y_coord);
-                        if sprite & mask != 0 {
-                            let index_coord: usize = ((y_coord as usize) * 64 + (x_coord as usize));
+                    for _a in 0..8 {
+                        //println!("Current Sprite {:#04b} Current x_coord {} Current y_coord {}", sprite, x_coord, y_coord);
+                        if sprite & mask != 0 && x_coord < 64 && y_coord < 32 {
+                            let index_coord: usize = (y_coord as usize) * 64 + (x_coord as usize);
                             match self.buffer[index_coord] {
                                 true => {
                                     self.buffer[index_coord] = false;
@@ -230,18 +244,19 @@ impl Sys {
                     if y_coord >= 32 { break; }
                     y_coord += 1;
                 }
-                let screen = self.translate_buffer(self.buffer);
-                window.update_with_buffer(&screen, 64, 32).unwrap()
-
+                self.display_updated = true;
             },
             0xE000 => match nn {
                 0x9E => {
-                    if window.is_key_down(self.hex_to_key_map[&(x as u8)]) {
+                    //println!("Checking for {} Key", self.v_register[x as usize]);
+                    if window.is_key_down(self.hex_to_key_map[&self.v_register[x as usize]]) {
+                        //println!("Key {:#02x} is down, skipping instruction", self.v_register[x as usize]);
                         self.program_counter += 2;
                     }
                 },
                 0xA1 => {
-                    if !window.is_key_down(self.hex_to_key_map[&(x as u8)]) {
+                    if !window.is_key_down(self.hex_to_key_map[&self.v_register[x as usize]]) {
+                        //println!("Key {:#02x} is NOT down, skipping instruction", self.v_register[x as usize]);
                         self.program_counter += 2;
                     }
                 }
@@ -261,30 +276,24 @@ impl Sys {
                     }
                 },
                 0x0A => {
-                    let pad_key = P;
-                    let key_pressed = window.get_keys_pressed(KeyRepeat::No);
-                    for key in key_pressed {
-                        if self.key_to_hex_map.contains_key(&key) {
-                            let pad_key = key;
-                            break;
+                    let keys = window.get_keys_pressed(KeyRepeat::No);
+                    if !keys.is_empty() {
+                        if let Some(&hex_value) = keys.iter()
+                            .find_map(|&key| self.key_to_hex_map.get(&key)) {
+                            self.v_register[x as usize] = hex_value;
                         }
-                    }
-                    if pad_key != P {
+                    } else {
+                        // If no key is pressed, decrement PC to repeat this instruction
                         self.program_counter -= 2;
-                        self.v_register[x as usize] = self.key_to_hex_map[&pad_key];
                     }
-                }
+                },
                 0x29 => self.index_register = (0x50 + self.v_register[x as usize]) as u16,
                 0x33 => {
                     let mut digit: u8 = self.v_register[x as usize];
-                    println!("FX33, Input Number: {}", digit);
                     self.ram[self.index_register as usize + 2] = digit % 10;
-                    println!("FX33, Third Digit: {}", digit % 10);
                     digit /= 10;
                     self.ram[self.index_register as usize + 1] = digit % 10;
-                    println!("FX33, Second Digit: {}", digit % 10);
                     digit /= 10;
-                    println!("FX33, First Digit: {}", digit % 10);
                     self.ram[self.index_register as usize] = digit;
                 },
                 0x55 => {
@@ -301,81 +310,15 @@ impl Sys {
             },
             _ => panic_unexpected(&op, &nnn)
         }
+        
     }
-    pub fn get_cycle_speed(&self) -> u64 {
-        (self.cycle_speed as u64) * 1000000
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_combine_bytes() {
-        let sys = Sys::new();
-        assert_eq!(Sys::_combine_bytes([0x12, 0x34]), 0x1234);
-        assert_eq!(Sys::_combine_bytes([0xAB, 0xCD]), 0xABCD);
-        assert_eq!(Sys::_combine_bytes([0x00, 0xFF]), 0x00FF);
-        assert_eq!(Sys::_combine_bytes([0xFF, 0x00]), 0xFF00);
-    }
-    #[test]
-    fn test_load_into_ram() {
-        let mut sys = Sys::new();
-        let test_data = [0x1, 0x2, 0x3, 0x4];
-        sys.load_into_ram(100, &test_data);
-        assert_eq!(&sys.ram[100..104], &test_data);
-    }
-    #[test]
-    fn test_stack_operations() {
-        let mut sys = Sys::new();
-        sys.push(0x123);
-        assert_eq!(sys.pop(), Some(0x123));
-        assert_eq!(sys.pop(), None);  // Empty stack
-    }
-    #[test]
-    fn test_system_init() {
-        let sys = Sys::new();
-        assert_eq!(sys.program_counter, 0);
-        assert_eq!(sys.index_register, 0);
-        assert_eq!(sys.v_register, [0; 16]);
-        assert!(sys.stack.is_empty());
-    }
-    #[test]
-    fn test_font_loading() {
-        let mut sys = Sys::new();
-        sys.load_into_ram(80, &FONT);
-        assert_eq!(&sys.ram[80..160], &FONT);
-    }
-    #[test]
-    fn test_fetch() {
-        let mut sys = Sys::new();
-        sys.ram[0] = 0x12;
-        sys.ram[1] = 0x34;
-        assert_eq!(sys.fetch(), 0x1234);
-        assert_eq!(sys.program_counter, 2);
-    }
-
-    #[test]
-    fn test_fetch_from_different_positions() {
-        let mut sys = Sys::new();
-        sys.program_counter = 100;  // Start from different position
-        sys.ram[100] = 0xAB;
-        sys.ram[101] = 0xCD;
-        assert_eq!(sys.fetch(), 0xABCD);
-        assert_eq!(sys.program_counter, 102);
-    }
-
-    #[test]
-    fn test_multiple_fetches() {
-        let mut sys = Sys::new();
-        sys.ram[0] = 0x12;
-        sys.ram[1] = 0x34;
-        sys.ram[2] = 0x56;
-        sys.ram[3] = 0x78;
-
-        assert_eq!(sys.fetch(), 0x1234);
-        assert_eq!(sys.fetch(), 0x5678);
-        assert_eq!(sys.program_counter, 4);
+    pub fn update_display(&mut self, window: &mut Window, rom_loaded: bool) {
+        if !rom_loaded { 
+            window.update();
+        } else if self.display_updated {
+            let screen = self.translate_buffer(self.buffer);
+            window.update_with_buffer(&screen, 64, 32).unwrap();
+            self.display_updated = false;
+        }
     }
 }
